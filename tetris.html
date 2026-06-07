@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>테트리스</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Segoe UI', sans-serif;
+    color: #eee;
+  }
+  #app {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+  }
+  canvas {
+    border: 2px solid #e94560;
+    box-shadow: 0 0 20px #e9456066;
+    display: block;
+  }
+  #panel {
+    width: 140px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .box {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .box h3 {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #e94560;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .box p {
+    font-size: 22px;
+    font-weight: bold;
+  }
+  #next-canvas {
+    display: block;
+    margin: 0 auto;
+  }
+  #keys {
+    font-size: 11px;
+    line-height: 1.9;
+    color: #aaa;
+  }
+  #keys span { color: #e94560; font-weight: bold; }
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: #0009;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+  }
+  #overlay h1 { font-size: 42px; color: #e94560; letter-spacing: 4px; }
+  #overlay p  { color: #ccc; font-size: 14px; }
+  #overlay button {
+    margin-top: 8px;
+    padding: 12px 36px;
+    background: #e94560;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    letter-spacing: 1px;
+  }
+  #overlay button:hover { background: #c73652; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="board" width="300" height="600"></canvas>
+  <div id="panel">
+    <div class="box">
+      <h3>점수</h3>
+      <p id="score">0</p>
+    </div>
+    <div class="box">
+      <h3>레벨</h3>
+      <p id="level">1</p>
+    </div>
+    <div class="box">
+      <h3>라인</h3>
+      <p id="lines">0</p>
+    </div>
+    <div class="box">
+      <h3>다음</h3>
+      <canvas id="next-canvas" width="100" height="100"></canvas>
+    </div>
+    <div class="box" id="keys">
+      <span>←→</span> 이동<br>
+      <span>↑</span> 회전<br>
+      <span>↓</span> 빠른 낙하<br>
+      <span>Space</span> 즉시 낙하<br>
+      <span>P</span> 일시정지
+    </div>
+  </div>
+</div>
+
+<div id="overlay">
+  <h1>TETRIS</h1>
+  <p>블록을 쌓아 라인을 완성하세요!</p>
+  <button onclick="startGame()">시작하기</button>
+</div>
+
+<script>
+const COLS = 10, ROWS = 20, BLOCK = 30;
+const COLORS = ['', '#e94560','#0f3460','#16c79a','#f5a623','#7c4dff','#00bcd4','#ff6b6b'];
+const SHAPES = [
+  [],
+  [[1,1,1,1]],
+  [[2,0],[2,0],[2,2]],
+  [[0,3],[0,3],[3,3]],
+  [[4,4],[4,4]],
+  [[0,5,5],[5,5,0]],
+  [[6,6,0],[0,6,6]],
+  [[0,7,0],[7,7,7]],
+];
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const nextCanvas = document.getElementById('next-canvas');
+const nCtx = nextCanvas.getContext('2d');
+
+let board, piece, nextPiece, score, level, lines, gameLoop, paused, gameOver;
+
+function createBoard() {
+  return Array.from({length: ROWS}, () => Array(COLS).fill(0));
+}
+
+function randomPiece() {
+  const id = Math.floor(Math.random() * 7) + 1;
+  const shape = SHAPES[id].map(r => [...r]);
+  return { id, shape, x: Math.floor(COLS/2) - Math.floor(shape[0].length/2), y: 0 };
+}
+
+function drawBlock(context, x, y, id, size=BLOCK) {
+  if (!id) return;
+  context.fillStyle = COLORS[id];
+  context.fillRect(x*size+1, y*size+1, size-2, size-2);
+  context.fillStyle = 'rgba(255,255,255,0.15)';
+  context.fillRect(x*size+1, y*size+1, size-2, 6);
+}
+
+function drawBoard() {
+  ctx.fillStyle = '#0d0d1a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // grid
+  ctx.strokeStyle = '#1a1a3e';
+  ctx.lineWidth = 0.5;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      ctx.strokeRect(c*BLOCK, r*BLOCK, BLOCK, BLOCK);
+      drawBlock(ctx, c, r, board[r][c]);
+    }
+  }
+}
+
+function drawPiece(p, context=ctx, ox=0, oy=0, size=BLOCK) {
+  p.shape.forEach((row, r) => row.forEach((v, c) => {
+    if (v) drawBlock(context, p.x+c+ox, p.y+r+oy, p.id, size);
+  }));
+}
+
+function drawGhost() {
+  let ghost = { ...piece, shape: piece.shape.map(r=>[...r]), y: piece.y };
+  while (isValid(ghost, 0, 1)) ghost.y++;
+  ctx.globalAlpha = 0.2;
+  drawPiece(ghost);
+  ctx.globalAlpha = 1;
+}
+
+function drawNext() {
+  nCtx.fillStyle = '#16213e';
+  nCtx.fillRect(0,0,100,100);
+  const s = nextPiece.shape;
+  const ox = Math.floor((4 - s[0].length)/2);
+  const oy = Math.floor((4 - s.length)/2);
+  const save = { x: nextPiece.x, y: nextPiece.y };
+  nextPiece.x = ox; nextPiece.y = oy;
+  drawPiece(nextPiece, nCtx, 0, 0, 24);
+  nextPiece.x = save.x; nextPiece.y = save.y;
+}
+
+function isValid(p, dx=0, dy=0, shape=p.shape) {
+  return shape.every((row, r) => row.every((v, c) => {
+    if (!v) return true;
+    const nx = p.x+c+dx, ny = p.y+r+dy;
+    return nx>=0 && nx<COLS && ny<ROWS && !board[ny]?.[nx];
+  }));
+}
+
+function place() {
+  piece.shape.forEach((row, r) => row.forEach((v, c) => {
+    if (v) board[piece.y+r][piece.x+c] = piece.id;
+  }));
+  clearLines();
+  piece = nextPiece;
+  nextPiece = randomPiece();
+  if (!isValid(piece)) endGame();
+}
+
+function clearLines() {
+  let cleared = 0;
+  for (let r = ROWS-1; r >= 0; r--) {
+    if (board[r].every(v => v)) {
+      board.splice(r, 1);
+      board.unshift(Array(COLS).fill(0));
+      cleared++; r++;
+    }
+  }
+  if (!cleared) return;
+  const pts = [0,100,300,500,800];
+  score += (pts[cleared] || 1000) * level;
+  lines += cleared;
+  level = Math.floor(lines / 10) + 1;
+  document.getElementById('score').textContent = score.toLocaleString();
+  document.getElementById('level').textContent = level;
+  document.getElementById('lines').textContent = lines;
+}
+
+function rotate(shape) {
+  return shape[0].map((_, c) => shape.map(row => row[c]).reverse());
+}
+
+function drop() {
+  if (isValid(piece, 0, 1)) { piece.y++; }
+  else { place(); }
+}
+
+function hardDrop() {
+  while (isValid(piece, 0, 1)) piece.y++;
+  place();
+}
+
+function render() {
+  drawBoard();
+  drawGhost();
+  drawPiece(piece);
+  drawNext();
+}
+
+function tick() {
+  if (!paused && !gameOver) {
+    drop();
+    render();
+  }
+}
+
+function getSpeed() {
+  return Math.max(100, 800 - (level-1)*70);
+}
+
+function startGame() {
+  document.getElementById('overlay').style.display = 'none';
+  board = createBoard();
+  score = 0; level = 1; lines = 0; paused = false; gameOver = false;
+  piece = randomPiece();
+  nextPiece = randomPiece();
+  document.getElementById('score').textContent = '0';
+  document.getElementById('level').textContent = '1';
+  document.getElementById('lines').textContent = '0';
+  clearInterval(gameLoop);
+  gameLoop = setInterval(tick, getSpeed());
+  render();
+}
+
+function endGame() {
+  gameOver = true;
+  clearInterval(gameLoop);
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `
+    <h1>GAME OVER</h1>
+    <p>최종 점수: <strong style="color:#e94560">${score.toLocaleString()}</strong></p>
+    <p>레벨 ${level} · ${lines} 라인</p>
+    <button onclick="startGame()">다시 시작</button>
+  `;
+  ov.style.display = 'flex';
+}
+
+document.addEventListener('keydown', e => {
+  if (gameOver) return;
+  if (e.key === 'p' || e.key === 'P') { paused = !paused; return; }
+  if (paused) return;
+  switch(e.key) {
+    case 'ArrowLeft':  if (isValid(piece,-1,0)) piece.x--; break;
+    case 'ArrowRight': if (isValid(piece, 1,0)) piece.x++; break;
+    case 'ArrowDown':  drop(); break;
+    case 'ArrowUp': {
+      const r = rotate(piece.shape);
+      if (isValid(piece,0,0,r)) piece.shape = r;
+      else if (isValid(piece,1,0,r)) { piece.shape=r; piece.x++; }
+      else if (isValid(piece,-1,0,r)) { piece.shape=r; piece.x--; }
+      break;
+    }
+    case ' ': e.preventDefault(); hardDrop(); break;
+  }
+  render();
+  // level speed update
+  clearInterval(gameLoop);
+  gameLoop = setInterval(tick, getSpeed());
+});
+</script>
+</body>
+</html>
